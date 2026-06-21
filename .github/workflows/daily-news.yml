@@ -1,0 +1,50 @@
+name: 일일 뉴스 발송
+
+on:
+  schedule:
+    # UTC 기준. 23:00 UTC = 한국시간(KST) 08:00. 시간을 바꾸려면 이 값을 수정하세요.
+    - cron: "0 23 * * *"
+  workflow_dispatch:        # 수동 실행 버튼 (테스트용)
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    env:
+      HAS_PAT: ${{ secrets.GH_PAT != '' }}
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 설정 파일 생성 (Secret -> config.json)
+        env:
+          CONFIG_JSON: ${{ secrets.CONFIG_JSON }}
+        run: printf '%s' "$CONFIG_JSON" > config.json
+
+      - name: 변경 전 해시 기록
+        id: before
+        run: echo "hash=$(sha256sum config.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: 뉴스 발송
+        run: python send_news.py
+
+      - name: 카카오 토큰 갱신 시 Secret 업데이트
+        if: env.HAS_PAT == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          AFTER=$(sha256sum config.json | cut -d' ' -f1)
+          if [ "$AFTER" != "${{ steps.before.outputs.hash }}" ]; then
+            echo "설정이 변경됨(카카오 토큰 갱신). Secret 업데이트."
+            gh secret set CONFIG_JSON < config.json
+          else
+            echo "변경 없음."
+          fi
+
+      - name: 로그 출력
+        if: always()
+        run: cat send_news.log 2>/dev/null || echo "로그 없음"

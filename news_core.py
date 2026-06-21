@@ -59,6 +59,13 @@ def _merge_defaults(config):
 
 
 def load_config():
+    # GitHub Actions 등 서버 환경: CONFIG_JSON 환경변수 우선
+    env_cfg = os.environ.get("CONFIG_JSON")
+    if env_cfg:
+        try:
+            return _merge_defaults(json.loads(env_cfg))
+        except json.JSONDecodeError:
+            pass
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
