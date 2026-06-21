@@ -344,6 +344,8 @@ class NewsConfigApp:
                 "model": self.config.get("ai", {}).get("model", "claude-opus-4-8"),
             },
             "summary": {"enabled": self.summary_enabled_var.get()},
+            # 카카오는 GUI 입력란이 없으므로 기존 설정(토큰 등)을 그대로 보존
+            "kakao": self.config.get("kakao", {}),
         }
 
     def _save(self):
