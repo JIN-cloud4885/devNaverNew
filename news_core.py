@@ -381,9 +381,22 @@ def build_email_html(results, include_content=False):
     return "".join(parts)
 
 
+def parse_recipients(recipient):
+    """쉼표/세미콜론/줄바꿈으로 구분된 수신자 문자열을 주소 리스트로 변환."""
+    if isinstance(recipient, list):
+        items = recipient
+    else:
+        items = re.split(r"[,;\n]+", recipient or "")
+    return [a.strip() for a in items if a.strip()]
+
+
 def send_email(config, results):
-    """검색 결과를 HTML 이메일로 발송. 실패 시 예외 발생."""
+    """검색 결과를 HTML 이메일로 발송. 여러 수신자는 BCC로 전송. 실패 시 예외 발생."""
     email = config["email"]
+    recipients = parse_recipients(email.get("recipient", ""))
+    if not recipients:
+        raise ValueError("받는 이메일이 없습니다.")
+
     msg = MIMEText(build_email_html(results, email.get("include_content", False)),
                    "html", "utf-8")
     total = sum(len(v) for v in results.values())
@@ -391,14 +404,18 @@ def send_email(config, results):
     now = datetime.now()
     msg["Subject"] = f"[네이버 뉴스] {now.strftime('%Y-%m-%d %H:%M')} 일일 리포트 ({total}건)"
     msg["From"] = email["sender"]
-    msg["To"] = email["recipient"]
+    if len(recipients) == 1:
+        msg["To"] = recipients[0]
+    else:
+        # 여러 명: 서로 주소가 보이지 않도록 To는 발신자, 나머지는 BCC
+        msg["To"] = email["sender"]
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid()
 
     with smtplib.SMTP(email["smtp_server"], int(email["smtp_port"]), timeout=20) as server:
         server.starttls()
         server.login(email["sender"], email["password"])
-        server.send_message(msg)
+        server.send_message(msg, from_addr=email["sender"], to_addrs=recipients)
 
 
 # ---------- 카카오톡 '나에게 보내기' ----------

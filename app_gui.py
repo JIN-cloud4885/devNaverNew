@@ -180,8 +180,12 @@ class NewsConfigApp:
             card, "보내는 이메일 (Gmail 등)", em.get("sender", ""))
         self.email_password = self._labeled_entry(
             card, "앱 비밀번호", em.get("password", ""), show="*")
-        self.email_recipient = self._labeled_entry(
-            card, "받는 이메일", em.get("recipient", ""))
+        tk.Label(card, text="받는 이메일 (여러 명은 쉼표 또는 줄바꿈으로 구분)",
+                 bg="white", fg="#666", font=("맑은 고딕", 9)).pack(anchor="w")
+        self.email_recipient = tk.Text(card, font=("맑은 고딕", 10), height=3,
+                                       highlightthickness=1, highlightbackground="#ddd")
+        self.email_recipient.pack(fill="x", pady=(2, 10))
+        self._set_text(self.email_recipient, em.get("recipient", ""))
 
         self.include_content_var = tk.BooleanVar(value=em.get("include_content", False))
         tk.Checkbutton(card, text="기사 본문도 함께 발송 (느려질 수 있음)",
@@ -327,7 +331,7 @@ class NewsConfigApp:
                 "smtp_port": int(self.smtp_port.get().strip() or 587),
                 "sender": self.email_sender.get().strip(),
                 "password": self.email_password.get().strip(),
-                "recipient": self.email_recipient.get().strip(),
+                "recipient": self.email_recipient.get("1.0", tk.END).strip(),
                 "include_content": self.include_content_var.get(),
             },
             "schedule": {
@@ -364,7 +368,7 @@ class NewsConfigApp:
         self._set_entry(self.smtp_port, str(em.get("smtp_port", 587)))
         self._set_entry(self.email_sender, em.get("sender", ""))
         self._set_entry(self.email_password, em.get("password", ""))
-        self._set_entry(self.email_recipient, em.get("recipient", ""))
+        self._set_text(self.email_recipient, em.get("recipient", ""))
         self.include_content_var.set(em.get("include_content", False))
         ai = self.config["ai"]
         self.ai_enabled_var.set(ai.get("enabled", False))
@@ -377,6 +381,11 @@ class NewsConfigApp:
     def _set_entry(entry, value):
         entry.delete(0, tk.END)
         entry.insert(0, value)
+
+    @staticmethod
+    def _set_text(widget, value):
+        widget.delete("1.0", tk.END)
+        widget.insert("1.0", value)
 
     # ---------- 검색 ----------
     def _search(self):
