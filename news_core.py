@@ -11,7 +11,7 @@ import urllib.request
 import urllib.error
 from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
-from email.utils import parsedate_to_datetime
+from email.utils import formatdate, make_msgid, parsedate_to_datetime
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
@@ -236,9 +236,13 @@ def send_email(config, results):
     msg = MIMEText(build_email_html(results, email.get("include_content", False)),
                    "html", "utf-8")
     total = sum(len(v) for v in results.values())
-    msg["Subject"] = f"[네이버 뉴스] {datetime.now().strftime('%Y-%m-%d')} 일일 리포트 ({total}건)"
+    # 제목·헤더를 매번 고유하게 만들어 메일 서버의 '중복 메일' 폐기를 방지
+    now = datetime.now()
+    msg["Subject"] = f"[네이버 뉴스] {now.strftime('%Y-%m-%d %H:%M')} 일일 리포트 ({total}건)"
     msg["From"] = email["sender"]
     msg["To"] = email["recipient"]
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid()
 
     with smtplib.SMTP(email["smtp_server"], int(email["smtp_port"]), timeout=20) as server:
         server.starttls()
