@@ -30,6 +30,8 @@ DEFAULT_CONFIG = {
         "include_content": False,
     },
     "schedule": {"time": "09:00", "enabled": False},
+    "ai": {"api_key": "", "enabled": False, "model": "claude-opus-4-8"},
+    "summary": {"enabled": False},
 }
 
 # 기간 라벨 -> 일수 (0 = 전체)
@@ -158,6 +160,126 @@ def fetch_article_content(url, max_chars=2000):
     return text
 
 
+def summarize_article(client, model, title, content):
+    """기사 본문을 2줄 이내로 요약. 실패 시 빈 문자열 반환."""
+    if not content:
+        return ""
+    prompt = (
+        "다음 뉴스 기사를 한국어로 2줄 이내(약 100자)로 핵심만 요약해줘. "
+        "군더더기 없이 사실만, 문장 끝맺음으로.\n\n"
+        f"제목: {title}\n본문: {content[:4000]}"
+    )
+    try:
+        resp = client.messages.create(
+            model=model,
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return "".join(b.text for b in resp.content if b.type == "text").strip()
+    except Exception:  # noqa: BLE001 - 요약 실패 시 원문 요약으로 대체
+        return ""
+
+
+# 기사 페이지의 공유 버튼·UI 잡텍스트
+_NOISE_TOKENS = [
+    "페이스북", "트위터", "카카오톡", "카카오스토리", "네이버밴드", "밴드",
+    "URL복사", "URL 복사", "글자크기", "글자 크기", "본문 글씨 크기 조정",
+    "기사저장", "스크랩", "인쇄", "공유하기", "댓글", "좋아요",
+    "기자페이지", "구독", "close", "레이어 닫기", "전체메뉴",
+    "기사 읽어주기", "읽어주기", "다시듣기", "글씨 크기 조절", "글씨크기",
+    "닫기 시 다른 기사의 본문도 동일하게 적용 됩니다", "닫기",
+    "로그인", "회원가입", "제보", "무단복제", "재배포 금지",
+]
+
+
+def clean_noise(text):
+    """기사 본문에서 공유 버튼/글자크기 등 UI 잡텍스트를 제거."""
+    if not text:
+        return ""
+    text = text.replace("&nbsp;", " ")
+    text = re.sub(r"<!--.*?-->", " ", text)               # HTML 주석
+    text = text.replace("-->", " ").replace("<!--", " ")  # 잘린 주석 잔여물
+    text = re.sub(r"입력\s*\d{4}[-.]\d{2}[-.]\d{2}[^가-힣]*", " ", text)  # 입력 2026-..
+    text = re.sub(r"수정\s*\d{4}[-.]\d{2}[-.]\d{2}[^가-힣]*", " ", text)  # 수정 2026-..
+    text = re.sub(r"X\s*\(?\s*트위터\s*\)?", " ", text)   # X(트위터) 공유 버튼
+    for tok in _NOISE_TOKENS + ["설정", "X ( )"]:
+        text = text.replace(tok, " ")
+    text = re.sub(r"[가-힣]{2,4}\s*기자", " ", text)       # 'OOO 기자' 바이라인
+    text = re.sub(r"\b가\b", " ", text)                    # 글자크기 '가 가 가'
+    text = re.sub(r"[\w.+-]+@[\w.-]+", " ", text)          # 이메일 주소
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def extractive_summary(content, max_chars=130):
+    """기사 본문에서 앞부분 핵심 문장 1~2개를 뽑아 2줄 요약(무료, API 불필요)."""
+    if not content:
+        return ""
+    text = clean_noise(content).replace("\n", " ")
+    # 사진 캡션/저작권/기자표기 등 군더더기 제거
+    text = re.sub(r"\[[^\]]*\]", " ", text)                 # [울산 동구 제공 ...]
+    text = re.sub(r"※[^.]*", " ", text)                     # ※ 안내문
+    text = re.sub(r"재판매[^.]*금지", " ", text)
+    text = re.sub(r"무단[ ]?전재[^.]*금지", " ", text)
+    text = re.sub(r"\(([^)]*=)?[^)]*\)\s*[가-힣]{2,4}\s*기자\s*=\s*", " ", text)  # (울산=연합뉴스) 장지현 기자 =
+    text = re.sub(r"[가-힣]{2,4}\s*기자\s*=\s*", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    # 문장 단위로 분리 (마침표/물음표/느낌표 + 공백, 또는 '다.' 종결)
+    sentences = re.split(r'(?<=[.!?])\s+|(?<=다\.)\s*', text)
+    summary = ""
+    for s in sentences:
+        s = s.strip()
+        if len(s) < 10:
+            continue
+        if not summary:
+            summary = s
+        elif len(summary) + len(s) <= max_chars:
+            summary += " " + s
+        else:
+            break
+    if len(summary) > max_chars:
+        summary = summary[:max_chars].rstrip() + " …"
+
+    # 품질 검증: 너무 짧거나 잡텍스트 잔여물이 있으면 실패 처리(원문 요약으로 대체)
+    if len(summary) < 25:
+        return ""
+    junk = ("로그인", "회원가입", "글씨", "조절", "다시듣기", "-->", "기사 읽어주기")
+    if any(j in summary for j in junk):
+        return ""
+    if "다." not in summary and not summary.endswith(("…", ".", "?", "!")):
+        return ""
+    return summary
+
+
+def apply_ai_summaries(config, results):
+    """ai.enabled면 Claude로, summary.enabled면 무료 추출 요약으로 각 기사 'ai_summary'를 채운다."""
+    ai = config.get("ai", {})
+    summary_cfg = config.get("summary", {})
+
+    if ai.get("enabled") and ai.get("api_key"):
+        import anthropic
+        client = anthropic.Anthropic(api_key=ai["api_key"])
+        model = ai.get("model") or "claude-opus-4-8"
+        for items in results.values():
+            for it in items:
+                link = it.get("originallink") or it.get("link", "")
+                content = fetch_article_content(link)
+                s = summarize_article(client, model, strip_tags(it.get("title", "")), content)
+                if s:
+                    it["ai_summary"] = s
+    elif summary_cfg.get("enabled"):
+        for items in results.values():
+            for it in items:
+                # 네이버 본문(dic_area)이 구조가 일정해 우선 사용
+                naver = it.get("link", "")
+                link = naver if "naver." in naver else (it.get("originallink") or naver)
+                content = fetch_article_content(link)
+                s = extractive_summary(content)
+                if s:
+                    it["ai_summary"] = s
+    return results
+
+
 def build_queries(keywords):
     """필수 키워드는 AND로 묶어 1건, 일반 키워드는 개별. -> [(label, query), ...]"""
     required = [k["text"] for k in keywords if k["required"]]
@@ -187,10 +309,28 @@ def run_search(config):
         if cutoff is not None:
             items = [it for it in items if within_period(it, cutoff)]
         results[label] = items
+    apply_ai_summaries(config, results)
     return results
 
 
 # ---------- 이메일 ----------
+def format_pubdate(pub):
+    """RFC822 형식(pubDate)을 'YYYY-MM-DD HH:MM'로 변환. 실패 시 원본 반환."""
+    try:
+        return parsedate_to_datetime(pub).strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError):
+        return pub
+
+
+def source_from_url(url):
+    """기사 URL에서 출처(도메인)를 추출. 예: https://www.yna.co.kr/... -> yna.co.kr"""
+    try:
+        netloc = urllib.parse.urlparse(url).netloc
+        return netloc[4:] if netloc.startswith("www.") else netloc
+    except ValueError:
+        return ""
+
+
 def build_email_html(results, include_content=False):
     today = datetime.now().strftime("%Y-%m-%d %H:%M")
     parts = [
@@ -204,25 +344,35 @@ def build_email_html(results, include_content=False):
         if not items:
             parts.append('<p style="color:#aaa;">검색 결과가 없습니다.</p>')
             continue
-        for it in items:
+        for idx, it in enumerate(items, 1):
             title = strip_tags(it.get("title", ""))
-            desc = strip_tags(it.get("description", ""))
-            date = it.get("pubDate", "")
+            ai_summary = it.get("ai_summary", "")
+            if ai_summary:  # AI 요약이 있으면 2줄 그대로 사용
+                desc = ai_summary
+            else:
+                desc = strip_tags(it.get("description", ""))
+                if len(desc) > 60:  # 요약 없으면 1줄(약 60자)로 제한
+                    desc = desc[:60].rstrip() + " …"
             link = it.get("originallink") or it.get("link", "")
+            source = source_from_url(link) or "출처 미상"
+            date = format_pubdate(it.get("pubDate", ""))
             content_html = ""
             if include_content:
                 content = fetch_article_content(link)
                 if content:
                     safe = content.replace("&", "&amp;").replace("<", "&lt;").replace("\n", "<br>")
-                    content_html = (f'<div style="color:#444;font-size:12px;margin-top:6px;'
+                    content_html = (f'<div style="color:#444;font-size:12px;margin-top:8px;'
                                     f'padding:8px;background:#f8f9fa;border-radius:4px;'
-                                    f'line-height:1.5;">{safe}</div>')
+                                    f'line-height:1.6;">{safe}</div>')
             parts.append(
-                f'<div style="margin:12px 0;padding-bottom:10px;border-bottom:1px solid #eee;">'
-                f'<a href="{link}" style="font-size:15px;font-weight:bold;color:#222;'
-                f'text-decoration:none;">{title}</a>'
-                f'<p style="color:#666;font-size:13px;margin:4px 0;">{desc}</p>'
-                f'<span style="color:#aaa;font-size:11px;">{date}</span>'
+                f'<div style="margin:14px 0;padding-bottom:12px;border-bottom:1px solid #eee;">'
+                f'<a href="{link}" style="font-size:15px;font-weight:bold;color:#1a1a1a;'
+                f'text-decoration:none;line-height:1.4;">{idx}. {title}</a>'
+                f'<div style="margin:6px 0;font-size:12px;color:#888;">'
+                f'<span style="color:#03c75a;font-weight:bold;">{source}</span>'
+                f'&nbsp;·&nbsp;{date}</div>'
+                f'<p style="color:#555;font-size:13px;margin:4px 0 0;line-height:1.6;'
+                f'{"" if ai_summary else "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"}">{desc}</p>'
                 f'{content_html}'
                 f'</div>'
             )

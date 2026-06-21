@@ -46,6 +46,7 @@ class NewsConfigApp:
         self._build_keyword_section(container)
         self._build_option_section(container)
         self._build_email_section(container)
+        self._build_ai_section(container)
         self._build_schedule_section(container)
         self._build_save_section(container)
 
@@ -192,6 +193,28 @@ class NewsConfigApp:
                  bg="white", fg="#aaa", font=("맑은 고딕", 8),
                  anchor="w").pack(fill="x")
 
+    def _build_ai_section(self, parent):
+        card = self._card(parent, "📝 본문 2줄 요약")
+        ai = self.config["ai"]
+        summary = self.config.get("summary", {})
+
+        self.summary_enabled_var = tk.BooleanVar(value=summary.get("enabled", False))
+        tk.Checkbutton(card, text="기사 본문을 가져와 2줄로 요약 (무료, 다소 느려짐)",
+                       variable=self.summary_enabled_var, bg="white", fg="#555",
+                       activebackground="white", font=("맑은 고딕", 9),
+                       cursor="hand2").pack(anchor="w", pady=(0, 6))
+
+        self.ai_enabled_var = tk.BooleanVar(value=ai.get("enabled", False))
+        tk.Checkbutton(card, text="(고급) Claude AI로 요약 — 품질 최고, API 비용 발생",
+                       variable=self.ai_enabled_var, bg="white", fg="#888",
+                       activebackground="white", font=("맑은 고딕", 9),
+                       cursor="hand2").pack(anchor="w", pady=(0, 6))
+        self.ai_api_key = self._labeled_entry(
+            card, "Claude API 키 (AI 요약 사용 시에만)", ai.get("api_key", ""), show="*")
+        tk.Label(card, text="※ 무료 요약은 본문 앞부분 핵심 문장을 뽑습니다. AI 요약은 키 입력 시에만 동작.",
+                 bg="white", fg="#aaa", font=("맑은 고딕", 8),
+                 anchor="w").pack(fill="x")
+
     def _build_schedule_section(self, parent):
         card = self._card(parent, "⏰ 자동 발송 일정")
         sc = self.config["schedule"]
@@ -311,6 +334,12 @@ class NewsConfigApp:
                 "time": self.schedule_time.get().strip(),
                 "enabled": self._task_exists(),
             },
+            "ai": {
+                "api_key": self.ai_api_key.get().strip(),
+                "enabled": self.ai_enabled_var.get(),
+                "model": self.config.get("ai", {}).get("model", "claude-opus-4-8"),
+            },
+            "summary": {"enabled": self.summary_enabled_var.get()},
         }
 
     def _save(self):
@@ -337,6 +366,10 @@ class NewsConfigApp:
         self._set_entry(self.email_password, em.get("password", ""))
         self._set_entry(self.email_recipient, em.get("recipient", ""))
         self.include_content_var.set(em.get("include_content", False))
+        ai = self.config["ai"]
+        self.ai_enabled_var.set(ai.get("enabled", False))
+        self._set_entry(self.ai_api_key, ai.get("api_key", ""))
+        self.summary_enabled_var.set(self.config.get("summary", {}).get("enabled", False))
         self._set_entry(self.schedule_time, self.config["schedule"].get("time", "09:00"))
         self._render_keywords()
 
@@ -393,7 +426,7 @@ class NewsConfigApp:
                 continue
             for it in items:
                 title = strip_tags(it.get("title", ""))
-                desc = strip_tags(it.get("description", ""))
+                desc = it.get("ai_summary") or strip_tags(it.get("description", ""))
                 date = it.get("pubDate", "")
                 link = it.get("originallink") or it.get("link", "")
 
