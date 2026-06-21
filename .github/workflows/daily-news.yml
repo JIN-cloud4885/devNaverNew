@@ -2,8 +2,8 @@ name: 일일 뉴스 발송
 
 on:
   schedule:
-    # UTC 기준. 23:00 UTC = 한국시간(KST) 08:00. 시간을 바꾸려면 이 값을 수정하세요.
-    - cron: "0 23 * * *"
+    # UTC 기준. 08:10 UTC = 한국시간(KST) 17:10. 시간을 바꾸려면 이 값을 수정하세요.
+    - cron: "10 8 * * *"
   workflow_dispatch:        # 수동 실행 버튼 (테스트용)
 
 jobs:
