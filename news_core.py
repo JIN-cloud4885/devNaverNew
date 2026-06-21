@@ -123,20 +123,44 @@ def fetch_news(query, client_id, client_secret, display, sort):
         return json.loads(resp.read().decode("utf-8")).get("items", [])
 
 
-def fetch_article_content(url, max_chars=2000):
-    """기사 URL에서 본문 텍스트를 추출. 실패 시 빈 문자열 반환.
-
-    외부 라이브러리 없이 처리한다. 네이버 뉴스(n.news.naver.com)는 본문 영역의
-    id가 고정돼 있어 우선 시도하고, 그 외 언론사는 <p> 태그를 모아 추정한다.
-    """
+def fetch_html(url):
+    """기사 URL의 HTML 원문을 반환. 실패 시 빈 문자열."""
     try:
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         })
         with urllib.request.urlopen(req, timeout=10) as resp:
             charset = resp.headers.get_content_charset() or "utf-8"
-            html = resp.read().decode(charset, errors="replace")
+            return resp.read().decode(charset, errors="replace")
     except (urllib.error.URLError, OSError, ValueError):
+        return ""
+
+
+def press_from_html(html):
+    """기사 HTML에서 언론사명을 추출 (og:site_name 등)."""
+    if not html:
+        return ""
+    for pattern in (
+        r'<meta[^>]+property=["\']og:site_name["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:site_name["\']',
+        r'<meta[^>]+name=["\']twitter:site["\'][^>]+content=["\']([^"\']+)["\']',
+    ):
+        m = re.search(pattern, html, re.IGNORECASE)
+        if m:
+            name = strip_tags(m.group(1)).strip()
+            if name and not name.startswith("@"):
+                return name
+    return ""
+
+
+def fetch_article_content(url, max_chars=2000, _html=None):
+    """기사 URL에서 본문 텍스트를 추출. 실패 시 빈 문자열 반환.
+
+    외부 라이브러리 없이 처리한다. 네이버 뉴스(n.news.naver.com)는 본문 영역의
+    id가 고정돼 있어 우선 시도하고, 그 외 언론사는 <p> 태그를 모아 추정한다.
+    """
+    html = _html if _html is not None else fetch_html(url)
+    if not html:
         return ""
 
     # <script>/<style> 제거
@@ -270,18 +294,25 @@ def apply_ai_summaries(config, results):
         model = ai.get("model") or "claude-opus-4-8"
         for items in results.values():
             for it in items:
-                link = it.get("originallink") or it.get("link", "")
-                content = fetch_article_content(link)
+                origin = it.get("originallink") or it.get("link", "")
+                html = fetch_html(origin)
+                it["press"] = press_name(origin, press_from_html(html))
+                content = fetch_article_content(origin, _html=html)
                 s = summarize_article(client, model, strip_tags(it.get("title", "")), content)
                 if s:
                     it["ai_summary"] = s
     elif summary_cfg.get("enabled"):
         for items in results.values():
             for it in items:
-                # 네이버 본문(dic_area)이 구조가 일정해 우선 사용
+                # 네이버 본문(dic_area)이 구조가 일정해 본문용으론 우선 사용
                 naver = it.get("link", "")
-                link = naver if "naver." in naver else (it.get("originallink") or naver)
-                content = fetch_article_content(link)
+                origin = it.get("originallink") or naver
+                link = naver if "naver." in naver else origin
+                html = fetch_html(link)
+                # 언론사명: 원문 페이지의 og:site_name(없으면 도메인 매핑)
+                og = press_from_html(html) if "naver." not in link else ""
+                it["press"] = press_name(origin, og)
+                content = fetch_article_content(link, _html=html)
                 s = extractive_summary(content)
                 if s:
                     it["ai_summary"] = s
@@ -339,6 +370,33 @@ def source_from_url(url):
         return ""
 
 
+# 흔한 언론사 도메인 -> 언론사명 (og:site_name을 못 얻을 때 폴백)
+PRESS_BY_DOMAIN = {
+    "yna.co.kr": "연합뉴스", "yonhapnews.co.kr": "연합뉴스",
+    "chosun.com": "조선일보", "donga.com": "동아일보", "joongang.co.kr": "중앙일보",
+    "hani.co.kr": "한겨레", "khan.co.kr": "경향신문", "hankyung.com": "한국경제",
+    "mk.co.kr": "매일경제", "seoul.co.kr": "서울신문", "kmib.co.kr": "국민일보",
+    "munhwa.com": "문화일보", "segye.com": "세계일보", "hankookilbo.com": "한국일보",
+    "kbs.co.kr": "KBS", "imbc.com": "MBC", "sbs.co.kr": "SBS", "ytn.co.kr": "YTN",
+    "jtbc.co.kr": "JTBC", "news1.kr": "뉴스1", "newsis.com": "뉴시스",
+    "edaily.co.kr": "이데일리", "mt.co.kr": "머니투데이", "fnnews.com": "파이낸셜뉴스",
+    "asiae.co.kr": "아시아경제", "sedaily.com": "서울경제", "heraldcorp.com": "헤럴드경제",
+    "kgnews.co.kr": "경기신문", "kyeonggi.com": "경기일보", "joongboo.com": "중부일보",
+    "incheonilbo.com": "인천일보", "kihoilbo.co.kr": "기호일보",
+    "newscj.com": "천지일보", "ccdailynews.com": "충청일보", "ccdn.co.kr": "충청신문",
+    "cctimes.kr": "충청타임즈", "boannews.com": "보안뉴스",
+}
+
+
+def press_name(url, og_name=""):
+    """언론사명 우선순위: og:site_name -> 도메인 매핑 -> 도메인."""
+    if og_name:
+        return og_name
+    domain = source_from_url(url)
+    base = domain[4:] if domain.startswith("www.") else domain
+    return PRESS_BY_DOMAIN.get(base, domain)
+
+
 def build_email_html(results, include_content=False):
     today = datetime.now().strftime("%Y-%m-%d %H:%M")
     parts = [
@@ -362,7 +420,7 @@ def build_email_html(results, include_content=False):
                 if len(desc) > 60:  # 요약 없으면 1줄(약 60자)로 제한
                     desc = desc[:60].rstrip() + " …"
             link = it.get("originallink") or it.get("link", "")
-            source = source_from_url(link) or "출처 미상"
+            source = it.get("press") or press_name(link) or "출처 미상"
             date = format_pubdate(it.get("pubDate", ""))
             content_html = ""
             if include_content:
@@ -485,7 +543,7 @@ def send_kakao_memo(config, results):
     contents = []
     for it in flat:
         title = strip_tags(it.get("title", ""))
-        src = source_from_url(it.get("originallink") or it.get("link", ""))
+        src = it.get("press") or press_name(it.get("originallink") or it.get("link", ""))
         contents.append({
             "title": title[:40],
             "description": f"{src} · {format_pubdate(it.get('pubDate', ''))}",
