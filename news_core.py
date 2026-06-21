@@ -27,6 +27,7 @@ DEFAULT_CONFIG = {
         "sender": "",
         "password": "",
         "recipient": "",
+        "include_content": False,
     },
     "schedule": {"time": "09:00", "enabled": False},
 }
@@ -83,7 +84,7 @@ def normalize_keywords(raw):
 
 # ---------- 검색 ----------
 def strip_tags(text):
-    text = re.sub(r"<.*?>", "", text)
+    text = re.sub(r"(?s)<.*?>", "", text)
     for a, b in [("&lt;", "<"), ("&gt;", ">"), ("&amp;", "&"),
                  ("&quot;", '"'), ("&apos;", "'"), ("&#39;", "'")]:
         text = text.replace(a, b)
@@ -110,6 +111,51 @@ def fetch_news(query, client_id, client_secret, display, sort):
     req.add_header("X-Naver-Client-Secret", client_secret)
     with urllib.request.urlopen(req, timeout=10) as resp:
         return json.loads(resp.read().decode("utf-8")).get("items", [])
+
+
+def fetch_article_content(url, max_chars=2000):
+    """기사 URL에서 본문 텍스트를 추출. 실패 시 빈 문자열 반환.
+
+    외부 라이브러리 없이 처리한다. 네이버 뉴스(n.news.naver.com)는 본문 영역의
+    id가 고정돼 있어 우선 시도하고, 그 외 언론사는 <p> 태그를 모아 추정한다.
+    """
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            charset = resp.headers.get_content_charset() or "utf-8"
+            html = resp.read().decode(charset, errors="replace")
+    except (urllib.error.URLError, OSError, ValueError):
+        return ""
+
+    # <script>/<style> 제거
+    html = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", html)
+
+    # 1) 네이버 뉴스 본문 영역 우선 추출
+    body_html = ""
+    m = re.search(r'(?is)<article[^>]*id="dic_area".*?</article>', html)
+    if not m:
+        m = re.search(r'(?is)<div[^>]*id="dic_area".*?</div>', html)
+    if not m:
+        m = re.search(r'(?is)<div[^>]*id="newsct_article".*?</div>', html)
+    if m:
+        body_html = m.group(0)
+    else:
+        # 2) 일반 언론사: 가장 긴 <article> 또는 <p> 모음
+        article = re.search(r"(?is)<article.*?</article>", html)
+        if article:
+            body_html = article.group(0)
+        else:
+            paragraphs = re.findall(r"(?is)<p[^>]*>(.*?)</p>", html)
+            body_html = " ".join(p for p in paragraphs if len(strip_tags(p)) > 20)
+
+    text = strip_tags(re.sub(r"(?is)<br\s*/?>", "\n", body_html))
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n\s*\n+", "\n\n", text).strip()
+    if len(text) > max_chars:
+        text = text[:max_chars].rstrip() + " …"
+    return text
 
 
 def build_queries(keywords):
@@ -145,7 +191,7 @@ def run_search(config):
 
 
 # ---------- 이메일 ----------
-def build_email_html(results):
+def build_email_html(results, include_content=False):
     today = datetime.now().strftime("%Y-%m-%d %H:%M")
     parts = [
         '<div style="font-family:Malgun Gothic,sans-serif;max-width:680px;margin:0 auto;">',
@@ -163,12 +209,21 @@ def build_email_html(results):
             desc = strip_tags(it.get("description", ""))
             date = it.get("pubDate", "")
             link = it.get("originallink") or it.get("link", "")
+            content_html = ""
+            if include_content:
+                content = fetch_article_content(link)
+                if content:
+                    safe = content.replace("&", "&amp;").replace("<", "&lt;").replace("\n", "<br>")
+                    content_html = (f'<div style="color:#444;font-size:12px;margin-top:6px;'
+                                    f'padding:8px;background:#f8f9fa;border-radius:4px;'
+                                    f'line-height:1.5;">{safe}</div>')
             parts.append(
                 f'<div style="margin:12px 0;padding-bottom:10px;border-bottom:1px solid #eee;">'
                 f'<a href="{link}" style="font-size:15px;font-weight:bold;color:#222;'
                 f'text-decoration:none;">{title}</a>'
                 f'<p style="color:#666;font-size:13px;margin:4px 0;">{desc}</p>'
                 f'<span style="color:#aaa;font-size:11px;">{date}</span>'
+                f'{content_html}'
                 f'</div>'
             )
     parts.append('</div>')
@@ -178,7 +233,8 @@ def build_email_html(results):
 def send_email(config, results):
     """검색 결과를 HTML 이메일로 발송. 실패 시 예외 발생."""
     email = config["email"]
-    msg = MIMEText(build_email_html(results), "html", "utf-8")
+    msg = MIMEText(build_email_html(results, email.get("include_content", False)),
+                   "html", "utf-8")
     total = sum(len(v) for v in results.values())
     msg["Subject"] = f"[네이버 뉴스] {datetime.now().strftime('%Y-%m-%d')} 일일 리포트 ({total}건)"
     msg["From"] = email["sender"]

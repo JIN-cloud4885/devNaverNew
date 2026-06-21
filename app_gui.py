@@ -182,6 +182,12 @@ class NewsConfigApp:
         self.email_recipient = self._labeled_entry(
             card, "받는 이메일", em.get("recipient", ""))
 
+        self.include_content_var = tk.BooleanVar(value=em.get("include_content", False))
+        tk.Checkbutton(card, text="기사 본문도 함께 발송 (느려질 수 있음)",
+                       variable=self.include_content_var, bg="white", fg="#555",
+                       activebackground="white", font=("맑은 고딕", 9),
+                       cursor="hand2").pack(anchor="w", pady=(0, 4))
+
         tk.Label(card, text="※ Gmail은 2단계 인증 후 '앱 비밀번호'를 발급받아 입력하세요.",
                  bg="white", fg="#aaa", font=("맑은 고딕", 8),
                  anchor="w").pack(fill="x")
@@ -299,6 +305,7 @@ class NewsConfigApp:
                 "sender": self.email_sender.get().strip(),
                 "password": self.email_password.get().strip(),
                 "recipient": self.email_recipient.get().strip(),
+                "include_content": self.include_content_var.get(),
             },
             "schedule": {
                 "time": self.schedule_time.get().strip(),
@@ -329,6 +336,7 @@ class NewsConfigApp:
         self._set_entry(self.email_sender, em.get("sender", ""))
         self._set_entry(self.email_password, em.get("password", ""))
         self._set_entry(self.email_recipient, em.get("recipient", ""))
+        self.include_content_var.set(em.get("include_content", False))
         self._set_entry(self.schedule_time, self.config["schedule"].get("time", "09:00"))
         self._render_keywords()
 
@@ -404,7 +412,34 @@ class NewsConfigApp:
                                cursor="hand2", wraplength=580, justify="left")
                 lnk.pack(fill="x")
                 lnk.bind("<Button-1>", lambda e, u=link: webbrowser.open(u))
+
+                # 본문 보기 (펼침)
+                content_lbl = tk.Label(item_frame, text="", bg="#f8f9fa", fg="#333",
+                                       font=("맑은 고딕", 9), anchor="w",
+                                       wraplength=560, justify="left")
+                btn = tk.Button(item_frame, text="📄 본문 보기", bg="#e9ecef", fg="#555",
+                                relief="flat", font=("맑은 고딕", 8, "bold"),
+                                cursor="hand2", padx=8, pady=2)
+                btn.config(command=lambda u=link, lbl=content_lbl, b=btn:
+                           self._load_article(u, lbl, b))
+                btn.pack(anchor="w", pady=(4, 0))
                 ttk.Separator(body, orient="horizontal").pack(fill="x", padx=16, pady=6)
+
+    def _load_article(self, url, label, button):
+        """기사 본문을 받아와 라벨에 펼쳐 표시. 다시 누르면 접기."""
+        if label.winfo_ismapped():  # 이미 펼쳐져 있으면 접기
+            label.pack_forget()
+            button.config(text="📄 본문 보기")
+            return
+        button.config(text="불러오는 중…", state="disabled")
+        self.root.update_idletasks()
+        text = news_core.fetch_article_content(url)
+        button.config(state="normal")
+        if not text:
+            text = "본문을 가져오지 못했습니다. (언론사 페이지 구조 차이 또는 접근 제한)"
+        label.config(text=text)
+        label.pack(fill="x", pady=(4, 0), ipady=6, padx=4)
+        button.config(text="🔼 본문 접기")
 
     # ---------- 자동 발송 일정 (Windows 작업 스케줄러) ----------
     @staticmethod
