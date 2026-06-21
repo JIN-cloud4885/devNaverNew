@@ -1,0 +1,12 @@
+# 민감 정보 (API 키, 앱 비밀번호 포함)
+config.json
+
+# 실행 로그
+send_news.log
+
+# Python
+__pycache__/
+*.pyc
+
+# 로컬 실행/스케줄러 산출물
+*.log

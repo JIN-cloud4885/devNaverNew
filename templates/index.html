@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>네이버 뉴스 수집 설정</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; color: #333; }
+
+    header {
+      background: #03c75a;
+      color: white;
+      padding: 18px 32px;
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+    }
+
+    .container { max-width: 800px; margin: 32px auto; padding: 0 16px; }
+
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 28px;
+      margin-bottom: 20px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+
+    .card h2 {
+      font-size: 15px;
+      font-weight: 700;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+      border-bottom: 2px solid #f0f2f5;
+    }
+
+    label { display: block; font-size: 13px; font-weight: 600; color: #666; margin-bottom: 6px; }
+
+    input[type="text"], input[type="password"], select {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1.5px solid #ddd;
+      border-radius: 8px;
+      font-size: 14px;
+      transition: border-color 0.2s;
+      margin-bottom: 16px;
+    }
+    input:focus, select:focus { outline: none; border-color: #03c75a; }
+
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+    /* 키워드 */
+    .keyword-input-row { display: flex; gap: 8px; margin-bottom: 12px; }
+    .keyword-input-row input { margin-bottom: 0; }
+
+    .btn {
+      padding: 10px 18px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+      white-space: nowrap;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn-green { background: #03c75a; color: white; }
+    .btn-gray  { background: #e9ecef; color: #555; }
+    .btn-red   { background: #ff4d4f; color: white; padding: 6px 12px; font-size: 12px; }
+
+    .keyword-list { display: flex; flex-wrap: wrap; gap: 8px; min-height: 40px; }
+    .keyword-tag {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: #e8f9ee;
+      border: 1.5px solid #b7efcf;
+      color: #1a7a3c;
+      padding: 5px 10px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .keyword-tag button {
+      background: none;
+      border: none;
+      color: #888;
+      cursor: pointer;
+      font-size: 15px;
+      line-height: 1;
+      padding: 0;
+    }
+    .keyword-tag button:hover { color: #ff4d4f; }
+
+    .empty-msg { color: #aaa; font-size: 13px; padding: 8px 0; }
+
+    /* 저장 버튼 */
+    .save-row { display: flex; align-items: center; gap: 12px; }
+    .toast {
+      font-size: 13px;
+      color: #03c75a;
+      font-weight: 600;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    .toast.show { opacity: 1; }
+
+    .toggle-secret { background: none; border: none; cursor: pointer; color: #999; font-size: 13px; float: right; }
+  </style>
+</head>
+<body>
+  <header>📰 네이버 뉴스 수집 설정</header>
+
+  <div class="container">
+
+    <!-- API 설정 -->
+    <div class="card">
+      <h2>🔑 API 인증 설정</h2>
+      <label>Client ID</label>
+      <input type="text" id="client_id" placeholder="네이버 개발자 센터에서 발급받은 Client ID"
+             value="{{ config.api.client_id }}">
+
+      <label>
+        Client Secret
+        <button class="toggle-secret" onclick="toggleSecret()">👁 보기</button>
+      </label>
+      <input type="password" id="client_secret" placeholder="Client Secret"
+             value="{{ config.api.client_secret }}">
+
+      <small style="color:#aaa; font-size:12px;">
+        👉 <a href="https://developers.naver.com/apps" target="_blank" style="color:#03c75a;">네이버 개발자 센터</a>에서 앱을 등록하면 발급됩니다.
+      </small>
+    </div>
+
+    <!-- 키워드 설정 -->
+    <div class="card">
+      <h2>🔍 검색 키워드</h2>
+      <div class="keyword-input-row">
+        <input type="text" id="keyword_input" placeholder="키워드 입력 후 추가" onkeydown="if(event.key==='Enter') addKeyword()">
+        <button class="btn btn-green" onclick="addKeyword()">추가</button>
+      </div>
+      <div class="keyword-list" id="keyword_list">
+        <span class="empty-msg" id="empty_msg">키워드를 추가해 주세요</span>
+      </div>
+    </div>
+
+    <!-- 검색 옵션 -->
+    <div class="card">
+      <h2>⚙️ 검색 옵션</h2>
+      <div class="row">
+        <div>
+          <label>결과 수 (1~100)</label>
+          <select id="display">
+            <option value="10">10개</option>
+            <option value="20">20개</option>
+            <option value="50">50개</option>
+            <option value="100">100개</option>
+          </select>
+        </div>
+        <div>
+          <label>정렬 방식</label>
+          <select id="sort">
+            <option value="date">최신순</option>
+            <option value="sim">관련도순</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- 저장 -->
+    <div class="card">
+      <div class="save-row">
+        <button class="btn btn-green" onclick="saveConfig()">💾 설정 저장</button>
+        <button class="btn btn-gray" onclick="loadConfig()">↩ 불러오기</button>
+        <span class="toast" id="toast">✅ 저장되었습니다</span>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    let keywords = {{ config.keywords | tojson }};
+
+    function renderKeywords() {
+      const list = document.getElementById('keyword_list');
+      const empty = document.getElementById('empty_msg');
+      list.innerHTML = '';
+      if (keywords.length === 0) {
+        list.appendChild(Object.assign(document.createElement('span'), {
+          className: 'empty-msg', textContent: '키워드를 추가해 주세요'
+        }));
+        return;
+      }
+      keywords.forEach((kw, i) => {
+        const tag = document.createElement('div');
+        tag.className = 'keyword-tag';
+        tag.innerHTML = `${kw} <button onclick="removeKeyword(${i})" title="삭제">×</button>`;
+        list.appendChild(tag);
+      });
+    }
+
+    function addKeyword() {
+      const input = document.getElementById('keyword_input');
+      const val = input.value.trim();
+      if (!val) return;
+      if (keywords.includes(val)) { input.value = ''; return; }
+      keywords.push(val);
+      input.value = '';
+      renderKeywords();
+    }
+
+    function removeKeyword(i) {
+      keywords.splice(i, 1);
+      renderKeywords();
+    }
+
+    function toggleSecret() {
+      const el = document.getElementById('client_secret');
+      el.type = el.type === 'password' ? 'text' : 'password';
+    }
+
+    function getConfig() {
+      return {
+        api: {
+          client_id: document.getElementById('client_id').value.trim(),
+          client_secret: document.getElementById('client_secret').value.trim()
+        },
+        keywords: keywords,
+        search: {
+          display: parseInt(document.getElementById('display').value),
+          sort: document.getElementById('sort').value
+        }
+      };
+    }
+
+    function applyConfig(config) {
+      document.getElementById('client_id').value = config.api.client_id || '';
+      document.getElementById('client_secret').value = config.api.client_secret || '';
+      keywords = config.keywords || [];
+      document.getElementById('display').value = config.search.display || 10;
+      document.getElementById('sort').value = config.search.sort || 'date';
+      renderKeywords();
+    }
+
+    async function saveConfig() {
+      const res = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(getConfig())
+      });
+      if (res.ok) {
+        const toast = document.getElementById('toast');
+        toast.classList.add('show');
+        setTimeout(() => toast.classList.remove('show'), 2000);
+      }
+    }
+
+    async function loadConfig() {
+      const res = await fetch('/api/config');
+      const config = await res.json();
+      applyConfig(config);
+    }
+
+    // 초기 렌더링
+    document.addEventListener('DOMContentLoaded', () => {
+      renderKeywords();
+      // 저장된 select 값 적용
+      document.getElementById('display').value = {{ config.search.display }};
+      document.getElementById('sort').value = '{{ config.search.sort }}';
+    });
+  </script>
+</body>
+</html>
