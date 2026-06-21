@@ -50,6 +50,16 @@ def main():
         return 1
 
     log(f"발송 완료: {email['recipient']} 로 {total}건 전송")
+
+    # 카카오톡 '나에게 보내기' (설정 시)
+    kakao = config.get("kakao", {})
+    if kakao.get("enabled") and kakao.get("rest_api_key") and kakao.get("refresh_token"):
+        try:
+            news_core.send_kakao_memo(config, results)
+            log("카카오톡 발송 완료")
+        except Exception as e:  # noqa: BLE001
+            log(f"카카오톡 발송 실패: {e}")
+
     return 0
 
 

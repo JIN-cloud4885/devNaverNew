@@ -32,6 +32,7 @@ DEFAULT_CONFIG = {
     "schedule": {"time": "09:00", "enabled": False},
     "ai": {"api_key": "", "enabled": False, "model": "claude-opus-4-8"},
     "summary": {"enabled": False},
+    "kakao": {"enabled": False, "rest_api_key": "", "refresh_token": ""},
 }
 
 # 기간 라벨 -> 일수 (0 = 전체)
@@ -398,3 +399,90 @@ def send_email(config, results):
         server.starttls()
         server.login(email["sender"], email["password"])
         server.send_message(msg)
+
+
+# ---------- 카카오톡 '나에게 보내기' ----------
+def kakao_refresh_access_token(rest_api_key, refresh_token):
+    """리프레시 토큰으로 새 액세스 토큰 발급. (access_token, new_refresh_token|None) 반환."""
+    data = urllib.parse.urlencode({
+        "grant_type": "refresh_token",
+        "client_id": rest_api_key,
+        "refresh_token": refresh_token,
+    }).encode("utf-8")
+    req = urllib.request.Request("https://kauth.kakao.com/oauth/token", data=data)
+    req.add_header("Content-Type", "application/x-www-form-urlencoded;charset=utf-8")
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        result = json.loads(resp.read().decode("utf-8"))
+    return result["access_token"], result.get("refresh_token")
+
+
+def build_kakao_text(results, max_items=8):
+    """검색 결과를 카카오 텍스트(200자 제한)로 요약. 헤드라인 목록 반환."""
+    total = sum(len(v) for v in results.values())
+    today = datetime.now().strftime("%m/%d %H:%M")
+    lines = [f"📰 네이버 뉴스 {today} ({total}건)", ""]
+    n = 0
+    for items in results.values():
+        for it in items:
+            n += 1
+            if n > max_items:
+                break
+            title = strip_tags(it.get("title", ""))
+            lines.append(f"{n}. {title}")
+        if n > max_items:
+            break
+    text = "\n".join(lines)
+    if len(text) > 195:
+        text = text[:195].rstrip() + "…"
+    return text
+
+
+def send_kakao_memo(config, results):
+    """검색 결과 헤드라인을 카카오톡 '나에게 보내기'로 발송. 실패 시 예외 발생."""
+    kakao = config["kakao"]
+    access_token, new_refresh = kakao_refresh_access_token(
+        kakao["rest_api_key"], kakao["refresh_token"])
+    if new_refresh:  # 리프레시 토큰이 갱신되면 저장
+        kakao["refresh_token"] = new_refresh
+        save_config(config)
+
+    # 헤드라인을 리스트형으로 구성 (각 항목 클릭 시 해당 기사 원문으로 이동)
+    flat = []
+    for items in results.values():
+        flat.extend(items)
+    flat = flat[:5]  # 리스트형은 최대 5건
+
+    def naver_news_search(title):
+        # 카카오는 등록된 도메인 링크만 열어주므로, 제목으로 네이버 뉴스 검색 링크 생성
+        q = urllib.parse.urlencode({"where": "news", "query": title, "sort": "1"})
+        url = "https://search.naver.com/search.naver?" + q
+        return {"web_url": url, "mobile_web_url": url}
+
+    contents = []
+    for it in flat:
+        title = strip_tags(it.get("title", ""))
+        src = source_from_url(it.get("originallink") or it.get("link", ""))
+        contents.append({
+            "title": title[:40],
+            "description": f"{src} · {format_pubdate(it.get('pubDate', ''))}",
+            "link": naver_news_search(title),
+        })
+
+    total = sum(len(v) for v in results.values())
+    today = datetime.now().strftime("%m/%d %H:%M")
+    head_link = naver_news_search("평택") if not contents else contents[0]["link"]
+    template = {
+        "object_type": "list",
+        "header_title": f"📰 네이버 뉴스 {today} ({total}건)",
+        "header_link": head_link,
+        "contents": contents,
+    }
+    data = urllib.parse.urlencode({
+        "template_object": json.dumps(template, ensure_ascii=False)
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://kapi.kakao.com/v2/api/talk/memo/default/send", data=data)
+    req.add_header("Authorization", f"Bearer {access_token}")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded;charset=utf-8")
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
