@@ -138,18 +138,36 @@ def fetch_html(url):
 
 
 def press_from_html(html):
-    """기사 HTML에서 언론사명을 추출 (og:site_name 등)."""
+    """기사 HTML에서 언론사명을 추출.
+
+    og:article:author(네이버 뉴스 페이지에 언론사명이 들어있음)를 우선하고,
+    그 다음 og:site_name(언론사 자체 페이지)을 사용한다.
+    """
     if not html:
         return ""
-    for pattern in (
+    generic = ("네이버", "naver", "네이버뉴스", "네이버 뉴스", "다음", "daum")
+
+    def clean(v):
+        v = strip_tags(v).strip()
+        # "경기일보|언론사 선정", "경기일보 - ..." 등에서 앞부분만
+        v = re.split(r"[|·\-–—:>]", v)[0].strip()
+        return v
+
+    # og:site_name(언론사명) 우선, 네이버 페이지처럼 generic이면 og:article:author 사용
+    patterns = (
         r'<meta[^>]+property=["\']og:site_name["\'][^>]+content=["\']([^"\']+)["\']',
         r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:site_name["\']',
-        r'<meta[^>]+name=["\']twitter:site["\'][^>]+content=["\']([^"\']+)["\']',
-    ):
+        r'<meta[^>]+name=["\']application-name["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+property=["\']og:article:author["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:article:author["\']',
+    )
+    for pattern in patterns:
         m = re.search(pattern, html, re.IGNORECASE)
         if m:
-            name = strip_tags(m.group(1)).strip()
-            if name and not name.startswith("@"):
+            name = clean(m.group(1))
+            if (name and name.lower() not in generic
+                    and not name.startswith("@")
+                    and not name.endswith("기자")):  # 기자 이름 제외
                 return name
     return ""
 
@@ -310,9 +328,8 @@ def apply_ai_summaries(config, results):
                 origin = it.get("originallink") or naver
                 link = naver if "naver." in naver else origin
                 html = fetch_html(link)
-                # 언론사명: 원문 페이지의 og:site_name(없으면 도메인 매핑)
-                og = press_from_html(html) if "naver." not in link else ""
-                it["press"] = press_name(origin, og)
+                # 언론사명: 페이지의 og:article:author/og:site_name → 없으면 도메인 매핑
+                it["press"] = press_name(origin, press_from_html(html))
                 content = fetch_article_content(link, _html=html)
                 s = extractive_summary(content)
                 if s:
@@ -389,6 +406,22 @@ PRESS_BY_DOMAIN = {
     "incheonilbo.com": "인천일보", "kihoilbo.co.kr": "기호일보",
     "newscj.com": "천지일보", "ccdailynews.com": "충청일보", "ccdn.co.kr": "충청신문",
     "cctimes.kr": "충청타임즈", "boannews.com": "보안뉴스",
+    "ohmynews.com": "오마이뉴스", "pressian.com": "프레시안", "nocutnews.co.kr": "노컷뉴스",
+    "dt.co.kr": "디지털타임스", "etnews.com": "전자신문", "zdnet.co.kr": "지디넷코리아",
+    "inews24.com": "아이뉴스24", "newspim.com": "뉴스핌", "ajunews.com": "아주경제",
+    "wikitree.co.kr": "위키트리", "kookje.co.kr": "국제신문", "busan.com": "부산일보",
+    "imaeil.com": "매일신문", "yeongnam.com": "영남일보", "kwnews.co.kr": "강원일보",
+    "kado.net": "강원도민일보", "jejunews.com": "제주일보", "honam.co.kr": "호남일보",
+    "kjdaily.com": "광주매일신문", "gjdream.com": "광주드림", "jnilbo.com": "전남일보",
+    "domin.co.kr": "전북도민일보", "jjan.kr": "전북일보", "idomin.com": "경남도민일보",
+    "knnews.co.kr": "경남신문", "kyongbuk.co.kr": "경북일보", "ccmail.kr": "충청매일",
+    "joongdo.co.kr": "중도일보", "daejonilbo.com": "대전일보", "ggilbo.com": "금강일보",
+    "newsis.com": "뉴시스", "newdaily.co.kr": "뉴데일리", "viva100.com": "브릿지경제",
+    "veritas-a.com": "베리타스알파", "lawtimes.co.kr": "법률신문", "dailian.co.kr": "데일리안",
+    "mediatoday.co.kr": "미디어오늘", "sisajournal.com": "시사저널",
+    "jndn.com": "전남도민일보", "asiatime.co.kr": "아시아타임즈", "4th.kr": "포쓰저널",
+    "sjbnews.com": "새전북신문", "jeollailbo.com": "전라일보", "g-enews.com": "글로벌이코노믹",
+    "beyondpost.co.kr": "비욘드포스트", "dnews.co.kr": "대한경제", "breaknews.com": "브레이크뉴스",
 }
 
 
