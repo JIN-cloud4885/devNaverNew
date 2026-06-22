@@ -4,6 +4,7 @@ import sys
 import webbrowser
 import tkinter as tk
 from tkinter import ttk, messagebox
+import tkinter.font as tkfont
 
 import news_core
 from news_core import (
@@ -277,13 +278,26 @@ class NewsConfigApp:
             tk.Label(self.keyword_frame, text="키워드를 추가해 주세요",
                      bg="white", fg="#aaa", font=("맑은 고딕", 9)).pack(anchor="w")
             return
+
+        # 폭에 맞춰 여러 줄로 자동 줄바꿈
+        font = tkfont.Font(family="맑은 고딕", size=9, weight="bold")
+        max_width = 460
+        row = tk.Frame(self.keyword_frame, bg="white")
+        row.pack(anchor="w")
+        used = 0
         for i, kw in enumerate(self.keywords):
             required = kw["required"]
             bg = "#ffe9e9" if required else "#e8f9ee"
             fg = "#c0392b" if required else "#1a7a3c"
             label = ("⭐ " if required else "") + kw["text"]
+            tag_w = font.measure(label) + 46  # 내부 여백 + × 버튼
 
-            tag = tk.Frame(self.keyword_frame, bg=bg, bd=0)
+            if used + tag_w > max_width and used > 0:  # 줄바꿈
+                row = tk.Frame(self.keyword_frame, bg="white")
+                row.pack(anchor="w")
+                used = 0
+
+            tag = tk.Frame(row, bg=bg, bd=0)
             tag.pack(side="left", padx=(0, 6), pady=3)
             name = tk.Label(tag, text=label, bg=bg, fg=fg, cursor="hand2",
                             font=("맑은 고딕", 9, "bold"))
@@ -292,6 +306,7 @@ class NewsConfigApp:
             tk.Button(tag, text="×", bg=bg, fg="#888", relief="flat",
                       font=("맑은 고딕", 9), cursor="hand2", bd=0,
                       command=lambda idx=i: self._remove_keyword(idx)).pack(side="left", padx=(0, 4))
+            used += tag_w + 6
 
     def _add_keyword(self):
         val = self.keyword_entry.get().strip()
