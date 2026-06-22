@@ -178,6 +178,8 @@ class NewsConfigApp:
 
         self.email_sender = self._labeled_entry(
             card, "보내는 이메일 (Gmail 등)", em.get("sender", ""))
+        self.email_sender_name = self._labeled_entry(
+            card, "보내는 사람 이름 (받는 사람에게 표시될 이름)", em.get("sender_name", ""))
         self.email_password = self._labeled_entry(
             card, "앱 비밀번호", em.get("password", ""), show="*")
         tk.Label(card, text="받는 이메일 (여러 명은 쉼표 또는 줄바꿈으로 구분)",
@@ -330,6 +332,7 @@ class NewsConfigApp:
                 "smtp_server": self.smtp_server.get().strip(),
                 "smtp_port": int(self.smtp_port.get().strip() or 587),
                 "sender": self.email_sender.get().strip(),
+                "sender_name": self.email_sender_name.get().strip(),
                 "password": self.email_password.get().strip(),
                 "recipient": self.email_recipient.get("1.0", tk.END).strip(),
                 "include_content": self.include_content_var.get(),
@@ -369,6 +372,7 @@ class NewsConfigApp:
         self._set_entry(self.smtp_server, em.get("smtp_server", ""))
         self._set_entry(self.smtp_port, str(em.get("smtp_port", 587)))
         self._set_entry(self.email_sender, em.get("sender", ""))
+        self._set_entry(self.email_sender_name, em.get("sender_name", ""))
         self._set_entry(self.email_password, em.get("password", ""))
         self._set_text(self.email_recipient, em.get("recipient", ""))
         self.include_content_var.set(em.get("include_content", False))
