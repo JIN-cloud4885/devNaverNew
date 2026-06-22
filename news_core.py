@@ -11,7 +11,7 @@ import urllib.request
 import urllib.error
 from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
-from email.utils import formatdate, make_msgid, parsedate_to_datetime
+from email.utils import formataddr, formatdate, make_msgid, parsedate_to_datetime
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
@@ -25,6 +25,7 @@ DEFAULT_CONFIG = {
         "smtp_server": "smtp.gmail.com",
         "smtp_port": 587,
         "sender": "",
+        "sender_name": "",
         "password": "",
         "recipient": "",
         "include_content": False,
@@ -339,7 +340,10 @@ def run_search(config):
 
     cutoff = None
     if search.get("period", 0) > 0:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=search["period"])
+        # 달력 기준: 오늘 0시에서 (period)일 전 0시부터. period=1이면 '어제 0시 ~ 현재'
+        now_local = datetime.now().astimezone()
+        today_midnight = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        cutoff = today_midnight - timedelta(days=search["period"])
 
     results = {}
     for label, query in build_queries(keywords):
@@ -468,7 +472,8 @@ def send_email(config, results):
     # 제목·헤더를 매번 고유하게 만들어 메일 서버의 '중복 메일' 폐기를 방지
     now = datetime.now()
     msg["Subject"] = f"[네이버 뉴스] {now.strftime('%Y-%m-%d %H:%M')} 일일 리포트 ({total}건)"
-    msg["From"] = email["sender"]
+    sender_name = email.get("sender_name", "")
+    msg["From"] = formataddr((sender_name, email["sender"])) if sender_name else email["sender"]
     if len(recipients) == 1:
         msg["To"] = recipients[0]
     else:
