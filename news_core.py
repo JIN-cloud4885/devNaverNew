@@ -6,6 +6,7 @@ import json
 import os
 import re
 import smtplib
+import sys
 import urllib.parse
 import urllib.request
 import urllib.error
@@ -13,7 +14,12 @@ from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from email.utils import formataddr, formatdate, make_msgid, parsedate_to_datetime
 
-CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+# 실행파일(.exe)로 빌드된 경우 exe가 있는 폴더, 아니면 스크립트 폴더 기준
+if getattr(sys, "frozen", False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 
 TASK_NAME = "NaverNewsDaily"
 
@@ -369,8 +375,57 @@ def run_search(config):
         if cutoff is not None:
             items = [it for it in items if within_period(it, cutoff)]
         results[label] = items
+    dedup_results(results)          # 키워드 간 중복 기사 제거(요약 전에 처리 → 더 빠름)
     apply_ai_summaries(config, results)
     return results
+
+
+def dedup_results(results):
+    """여러 키워드에 중복으로 잡힌 같은 기사를 한 번만 남긴다(먼저 나온 것 유지)."""
+    seen = set()
+    for label, items in results.items():
+        kept = []
+        for it in items:
+            key = (it.get("originallink") or it.get("link", "")).split("?")[0].rstrip("/")
+            if key and key in seen:
+                continue
+            seen.add(key)
+            kept.append(it)
+        results[label] = kept
+    return results
+
+
+def build_briefing(config, results):
+    """수집한 기사들을 Claude로 주제별 5~7줄 종합 브리핑. 키 없으면 빈 문자열."""
+    ai = config.get("ai", {})
+    if not ai.get("enabled") or not ai.get("api_key"):
+        return ""
+    lines = []
+    for items in results.values():
+        for it in items:
+            t = strip_tags(it.get("title", ""))
+            s = it.get("ai_summary") or strip_tags(it.get("description", ""))[:80]
+            if t:
+                lines.append(f"- {t} :: {s}")
+    if not lines:
+        return ""
+    prompt = (
+        "다음은 오늘 수집한 뉴스 헤드라인과 요약이야. 외국인·다문화·국제교류 업무 "
+        "담당자가 빠르게 파악하도록 주제별로 묶어 핵심만 5~7줄로 종합 브리핑해줘. "
+        "각 줄은 '• '로 시작하는 한 문장, 과장 없이 사실 위주로.\n\n"
+        + "\n".join(lines[:150])
+    )
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=ai["api_key"])
+        resp = client.messages.create(
+            model=ai.get("model") or "claude-opus-4-8",
+            max_tokens=900,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return "".join(b.text for b in resp.content if b.type == "text").strip()
+    except Exception:  # noqa: BLE001 - 브리핑 실패해도 본문은 발송
+        return ""
 
 
 # ---------- 이메일 ----------
@@ -434,13 +489,36 @@ def press_name(url, og_name=""):
     return PRESS_BY_DOMAIN.get(base, domain)
 
 
-def build_email_html(results, include_content=False):
+def build_email_html(results, include_content=False, briefing=""):
     today = datetime.now().strftime("%Y-%m-%d %H:%M")
+    total = sum(len(v) for v in results.values())
     parts = [
         '<div style="font-family:Malgun Gothic,sans-serif;max-width:680px;margin:0 auto;">',
         f'<h2 style="color:#03c75a;">📰 네이버 뉴스 일일 리포트</h2>',
-        f'<p style="color:#888;font-size:13px;">생성 시각: {today}</p>',
+        f'<p style="color:#888;font-size:13px;">생성 시각: {today} · 총 {total}건</p>',
     ]
+
+    if briefing:  # AI 종합 브리핑
+        safe = briefing.replace("&", "&amp;").replace("<", "&lt;").replace("\n", "<br>")
+        parts.append(
+            '<div style="background:#f3f9ff;border:1px solid #cfe3ff;border-radius:8px;'
+            'padding:14px 16px;margin:10px 0 4px;">'
+            '<div style="font-weight:bold;color:#1a5fb4;margin-bottom:6px;">🧭 오늘의 핵심 브리핑</div>'
+            f'<div style="color:#333;font-size:13px;line-height:1.7;">{safe}</div></div>'
+        )
+    else:  # 키 없을 때: 헤드라인 목차(한눈에 보기, 상위 40건)
+        all_titles = [strip_tags(it.get("title", ""))
+                      for items in results.values() for it in items]
+        shown = all_titles[:40]
+        if shown:
+            extra = f'<li style="list-style:none;color:#888;">…외 {total - 40}건</li>' if total > 40 else ""
+            parts.append(
+                '<div style="background:#f8f9fa;border-radius:8px;padding:12px 16px;margin:10px 0 4px;">'
+                '<div style="font-weight:bold;color:#555;margin-bottom:6px;">📌 한눈에 보기</div>'
+                '<ol style="margin:0;padding-left:20px;color:#333;font-size:12px;line-height:1.6;">'
+                + "".join(f"<li>{t}</li>" for t in shown) + extra + "</ol></div>"
+            )
+
     for label, items in results.items():
         parts.append(f'<h3 style="background:#e8f9ee;color:#1a7a3c;padding:8px 12px;'
                      f'border-radius:6px;">🔍 {label} ({len(items)}건)</h3>')
@@ -499,8 +577,10 @@ def send_email(config, results):
     if not recipients:
         raise ValueError("받는 이메일이 없습니다.")
 
-    msg = MIMEText(build_email_html(results, email.get("include_content", False)),
-                   "html", "utf-8")
+    briefing = build_briefing(config, results)
+    msg = MIMEText(
+        build_email_html(results, email.get("include_content", False), briefing),
+        "html", "utf-8")
     total = sum(len(v) for v in results.values())
     # 제목·헤더를 매번 고유하게 만들어 메일 서버의 '중복 메일' 폐기를 방지
     now = datetime.now()
